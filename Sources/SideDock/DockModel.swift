@@ -49,7 +49,8 @@ final class DockModel: ObservableObject {
     @Published var hoveredID: String?
     @Published private(set) var trashFull = false          // icon under the pointer (cleared when the dock hides)
     @Published private(set) var groups: [String: AppGroup] = DockModel.loadGroups()
-    @Published private(set) var aero = AeroSpace.Snapshot()   // AeroSpace workspace per app
+    @Published private(set) var aero = AeroSpace.Snapshot()
+    @Published private(set) var frontmostPath: String?   // AeroSpace workspace per app
     @Published var prefsVersion = 0            // bumps when folder settings change
     var dragging: String?                      // item being reordered
 
@@ -91,6 +92,7 @@ final class DockModel: ObservableObject {
             $0.activationPolicy == .regular && $0.bundleURL != nil && $0.bundleURL!.path != me
         }
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleURL?.path
+        if frontmost != frontmostPath { frontmostPath = frontmost }
         let runningPaths = Set(running.compactMap { $0.bundleURL?.path })
 
         let pinned = pinnedPaths.filter { Self.isGroup($0) ? groups[$0] != nil : FileManager.default.fileExists(atPath: $0) }
@@ -268,6 +270,9 @@ final class DockModel: ObservableObject {
     func setAero(_ new: AeroSpace.Snapshot) {
         if new != aero { aero = new }
     }
+
+    /// True once AeroSpace has reported in; then an app with no workspace counts as closed.
+    var aeroActive: Bool { Prefs.shared.showWorkspaces && !aero.workspaces.isEmpty }
 
     /// Workspaces holding this item's windows (for a group: all its apps).
     func workspaces(for item: DockItem) -> [String] {

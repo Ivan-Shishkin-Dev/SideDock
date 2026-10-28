@@ -101,7 +101,6 @@ private struct AppearanceTab: View {
                     ValueSlider(title: "Magnification", value: $prefs.magnifyAmount, range: 1.05...1.8, step: 0.05,
                                 format: { "\(Int(($0 * 100).rounded()))%" })
                 }
-                Toggle("Show running indicators", isOn: $prefs.showIndicators)
                 Toggle("Show names on hover", isOn: $prefs.showTooltips)
             }
             Section("Background") {

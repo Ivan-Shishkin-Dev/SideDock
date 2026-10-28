@@ -19,13 +19,14 @@ struct DockView: View {
             ForEach(model.pinnedItems) { item in
                 DockIcon(item: item, model: model, prefs: prefs)
             }
-            if prefs.showRunningApps && !model.runningItems.isEmpty {
+            let running = model.aeroActive ? model.runningItems.filter { !model.workspaces(for: $0).isEmpty } : model.runningItems
+            if prefs.showRunningApps && !running.isEmpty {
                 if !model.pinnedItems.isEmpty {
                     Capsule().fill(.secondary.opacity(0.5))
                         .frame(width: prefs.iconSize * 0.7, height: 1)
                         .padding(.vertical, 2)
                 }
-                ForEach(model.runningItems) { item in
+                ForEach(running) { item in
                     DockIcon(item: item, model: model, prefs: prefs)
                 }
             }
@@ -56,7 +57,6 @@ struct DockIcon: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            if prefs.edge == .left { dot }
             iconImage
                 .frame(width: size, height: size)
                 .background { mergeRing }
@@ -67,7 +67,6 @@ struct DockIcon: View {
                 .scaleEffect(hovering && prefs.magnify ? prefs.magnifyAmount : 1,
                              anchor: prefs.edge == .left ? .leading : .trailing)
                 .animation(.spring(response: 0.2, dampingFraction: 0.82), value: hovering)
-            if prefs.edge == .right { dot }
         }
         .zIndex(hovering ? 1 : 0)
         .contentShape(Rectangle())
@@ -153,14 +152,20 @@ struct DockIcon: View {
                 ZStack {
                     ForEach(Array(item.members.prefix(4).enumerated()), id: \.offset) { i, path in
                         if let ws = model.aero.workspaces[path]?.first {
-                            Color.clear.overlay(alignment: corners[i]) { tag(ws, small: true).offset(offsets[i]) }
+                            Color.clear.overlay(alignment: corners[i]) {
+                                tag(ws, small: true, current: path == model.frontmostPath).offset(offsets[i])
+                            }
                         }
                     }
                 }
             } else {
                 let spaces = model.workspaces(for: item)
                 if !spaces.isEmpty {
-                    HStack(spacing: 2) { ForEach(spaces.prefix(3), id: \.self) { tag($0, small: false) } }
+                    HStack(spacing: 2) {
+                        ForEach(spaces.prefix(3), id: \.self) { ws in
+                            tag(ws, small: false, current: item.isActive && (spaces.count == 1 || ws == model.aero.focused))
+                        }
+                    }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                         .offset(x: -4, y: 4)
                 }
@@ -168,8 +173,9 @@ struct DockIcon: View {
         }
     }
 
-    private func tag(_ ws: String, small: Bool) -> some View {
-        let focused = ws == model.aero.focused
+    /// Workspace letter; blue when it's the app you're in right now.
+    private func tag(_ ws: String, small: Bool, current: Bool) -> some View {
+        let focused = current
         let side = size * (small ? 0.27 : 0.32)
         return Text(ws)
             .font(.system(size: max(7, side * 0.68), weight: .bold, design: .rounded))
@@ -180,13 +186,6 @@ struct DockIcon: View {
                 .fill(focused ? Color.accentColor : Color(nsColor: .windowBackgroundColor).opacity(0.92)))
             .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
             .onTapGesture { AeroSpace.focus(ws) }
-    }
-
-    private var dot: some View {
-        Circle()
-            .fill(item.isActive ? Color.accentColor : Color.primary.opacity(0.7))
-            .frame(width: 4, height: 4)
-            .opacity(item.isRunning && prefs.showIndicators ? 1 : 0)
     }
 
     @ViewBuilder private var menu: some View {
@@ -398,7 +397,7 @@ struct GroupView: View {
     let item: DockItem
     @ObservedObject var model: DockModel
     @ObservedObject var prefs: Prefs
-    private let tile: CGFloat = 84
+    private let tile: CGFloat = 66
 
     var body: some View {
         let columns = max(2, min(Int(prefs.stackColumns), item.members.count))
@@ -414,18 +413,18 @@ struct GroupView: View {
             .padding(12)
             Divider()
             ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(tile), spacing: 8), count: columns), spacing: 10) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(tile), spacing: 2), count: columns), spacing: 4) {
                     ForEach(item.members, id: \.self) { path in
                         GroupAppTile(path: path, groupID: item.id, model: model, showBadge: prefs.showBadges)
                     }
                 }
-                .padding(12)
+                .padding(8)
             }
-            .frame(height: min(CGFloat(max(rows, 1)) * 112 + 24, 440))
+            .frame(height: min(CGFloat(max(rows, 1)) * 84 + 16, 440))
             Divider()
             Text("Drop apps here to add them").font(.caption).foregroundStyle(.secondary).padding(8)
         }
-        .frame(width: CGFloat(columns) * tile + CGFloat(columns - 1) * 8 + 24)
+        .frame(width: max(200, CGFloat(columns) * tile + CGFloat(columns - 1) * 2 + 16))
         .onDrop(of: [.fileURL, .sideDockItem], isTargeted: nil) { providers in
             if let dragged = model.dragging, dragged.hasSuffix(".app") {
                 model.addToGroup(dragged, item.id)
@@ -456,11 +455,13 @@ struct GroupAppTile: View {
 
     var body: some View {
         let running = model.isRunning(path)
-        VStack(spacing: 3) {
+        let spaces = model.aero.workspaces[path] ?? []
+        let current = path == model.frontmostPath
+        VStack(spacing: 2) {
             Image(nsImage: model.icon(for: path))
                 .resizable()
                 .interpolation(.high)
-                .frame(width: 52, height: 52)
+                .frame(width: 48, height: 48)
                 .overlay(alignment: .topTrailing) {
                     if showBadge, let text = model.badges[path] {
                         Text(text)
@@ -472,10 +473,27 @@ struct GroupAppTile: View {
                             .offset(x: 4, y: -4)
                     }
                 }
-            Text(name).font(.system(size: 11)).lineLimit(1).frame(width: 80)
-            Circle().fill(Color.primary.opacity(0.7)).frame(width: 4, height: 4).opacity(running ? 1 : 0)
+                .overlay(alignment: .bottomLeading) {
+                    HStack(spacing: 2) {
+                        ForEach(spaces.prefix(3), id: \.self) { ws in
+                            let on = current && (spaces.count == 1 || ws == model.aero.focused)
+                            Text(ws)
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(on ? Color.white : Color.primary)
+                                .padding(.horizontal, 2)
+                                .frame(minWidth: 16, minHeight: 16)
+                                .background(RoundedRectangle(cornerRadius: 4)
+                                    .fill(on ? Color.accentColor : Color(nsColor: .windowBackgroundColor).opacity(0.92)))
+                                .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+                                .onTapGesture { AeroSpace.focus(ws) }
+                        }
+                    }
+                    .offset(x: -4, y: 4)
+                }
+            Text(name).font(.system(size: 11)).lineLimit(1).frame(width: 62)
         }
-        .padding(4)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
         .background(RoundedRectangle(cornerRadius: 8).fill(hovering ? Color.primary.opacity(0.1) : .clear))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
