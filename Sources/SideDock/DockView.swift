@@ -2,9 +2,26 @@ import QuickLookThumbnailing
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Each icon reports its layout frame so the dock can pick the hovered icon from one pointer position.
+struct IconFrames: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+extension View {
+    func reportsFrame(_ id: String) -> some View {
+        background(GeometryReader { geo in
+            Color.clear.preference(key: IconFrames.self, value: [id: geo.frame(in: .named("dock"))])
+        })
+    }
+}
+
 struct DockView: View {
     @ObservedObject var model: DockModel
     @ObservedObject var prefs: Prefs
+    @State private var frames: [String: CGRect] = [:]
 
     /// Extra room on the inner side so magnified icons aren't clipped.
     private var magnifyRoom: CGFloat {
@@ -36,6 +53,18 @@ struct DockView: View {
         .padding(prefs.edge == .left ? .trailing : .leading, magnifyRoom)
         .fixedSize()
         .contentShape(Rectangle())
+        .coordinateSpace(name: "dock")
+        .onPreferenceChange(IconFrames.self) { frames = $0 }
+        .onContinuousHover(coordinateSpace: .named("dock")) { phase in
+            switch phase {
+            case .active(let pt):
+                // Only the icon square directly under the pointer lights up.
+                let id = frames.first { $0.value.contains(pt) }?.key
+                if model.hoveredID != id { model.hoveredID = id }
+            case .ended:
+                if model.hoveredID != nil { model.hoveredID = nil }
+            }
+        }
         .onDrop(of: [.fileURL, .sideDockItem], delegate: ItemDrop(target: nil, model: model, height: 0))
     }
 }
@@ -70,9 +99,7 @@ struct DockIcon: View {
         }
         .zIndex(hovering ? 1 : 0)
         .contentShape(Rectangle())
-        .onHover { inside in
-            if inside { model.hoveredID = item.id } else if model.hoveredID == item.id { model.hoveredID = nil }
-        }
+        .reportsFrame(item.id)
         .onTapGesture { click() }
         .onDrag {
             model.dragging = item.id
@@ -254,7 +281,6 @@ struct TrashIcon: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            if prefs.edge == .left { Color.clear.frame(width: 4, height: 4) }
             Image(nsImage: model.trashIcon)
                 .resizable()
                 .interpolation(.high)
@@ -266,16 +292,15 @@ struct TrashIcon: View {
                             .padding(-4)
                     }
                 }
+                .brightness(hovering || targeted ? 0.12 : 0)
+                .shadow(color: .white.opacity(hovering || targeted ? 0.55 : 0), radius: hovering || targeted ? 8 : 0)
                 .scaleEffect((hovering || targeted) && prefs.magnify ? prefs.magnifyAmount : 1,
                              anchor: prefs.edge == .left ? .leading : .trailing)
                 .animation(.spring(response: 0.2, dampingFraction: 0.82), value: hovering || targeted)
-            if prefs.edge == .right { Color.clear.frame(width: 4, height: 4) }
         }
         .zIndex(hovering ? 1 : 0)
         .contentShape(Rectangle())
-        .onHover { inside in
-            if inside { model.hoveredID = "trash" } else if model.hoveredID == "trash" { model.hoveredID = nil }
-        }
+        .reportsFrame("trash")
         .onTapGesture { model.openTrash() }
         .onDrop(of: [.fileURL, .sideDockItem], isTargeted: $targeted) { providers in
             if let dragged = model.dragging {

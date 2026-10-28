@@ -267,12 +267,17 @@ final class AppController: NSObject, NSApplicationDelegate {
                 edgeHitAt = nil
             }
         } else {
-            // Stay open while a folder stack or the Settings window is in use.
-            if model.openStack != nil || model.dragging != nil
-                || panel.frame.insetBy(dx: -24, dy: -24).contains(p) {
+            // Stay open while the pointer is over the dock or an open folder/group popup.
+            let popups = NSApp.windows.filter { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+            let near = panel.frame.insetBy(dx: -24, dy: -24).contains(p)
+                || popups.contains { $0.frame.insetBy(dx: -24, dy: -24).contains(p) }
+            if near || model.dragging != nil {
                 mouseLeftAt = nil
             } else if let left = mouseLeftAt {
-                if Date().timeIntervalSince(left) > prefs.hideDelay { setShown(false, animated: true) }
+                if Date().timeIntervalSince(left) > prefs.hideDelay {
+                    model.openStack = nil
+                    setShown(false, animated: true)
+                }
             } else {
                 mouseLeftAt = Date()
             }
