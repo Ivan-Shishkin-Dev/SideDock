@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QuartzCore
 import SwiftUI
 
 /// Borderless floating panel that never steals focus from the app you're using.
@@ -18,6 +19,8 @@ final class DockPanel: NSPanel {
     }
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    // Let the panel park just past the screen edge while hidden.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 /// Hosts the dock. Clicks work on the first try, and ⌘-click anywhere opens Settings.
@@ -48,6 +51,11 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var mouseLeftAt: Date?
     private var edgeHitAt: Date?
 
+    /// Slide in progress, driven by the display's refresh rate.
+    private struct Slide { var from: NSPoint; var to: NSPoint; var fromAlpha: CGFloat; var toAlpha: CGFloat; var start: CFTimeInterval; var duration: Double }
+    private var slide: Slide?
+    private var displayLink: CADisplayLink?
+
     func applicationDidFinishLaunching(_ note: Notification) {
         blur.blendingMode = .behindWindow
         blur.state = .active
@@ -64,21 +72,31 @@ final class AppController: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)   // runs after the new value is stored
             .sink { [weak self] _ in self?.applyPrefs() }
             .store(in: &cancellables)
+        // Content changes (apps launching, badges) only resize; they never restart the slide.
         model.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.layout(animated: true) }
+            .debounce(for: .milliseconds(30), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.updateSize() }
             .store(in: &cancellables)
 
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.layout(animated: false) }
+            MainActor.assumeIsolated { self?.updateSize() }
         }
         NotificationCenter.default.addObserver(forName: .openSideDockSettings, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.openSettings() }
         }
 
         panel.orderFrontRegardless()
-        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        // React to the pointer the moment it moves, not on a polling interval.
+        NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.trackMouse() }
+        }
+        NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+            MainActor.assumeIsolated { self?.trackMouse() }
+            return event
+        }
+        // Fallback for delays and for when the pointer stops moving.
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.trackMouse() }
         }
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -105,7 +123,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         if !prefs.autoHide { isShown = true }
         model.reloadFolderPreviews()
-        layout(animated: true)
+        updateSize()
     }
 
     /// Refreshes folder stacks and badges every couple of seconds.
@@ -140,25 +158,70 @@ final class AppController: NSObject, NSApplicationDelegate {
         return NSRect(x: x, y: max(area.minY, y), width: size.width, height: height)
     }
 
-    private func layout(animated: Bool) {
+    private var visible: Bool { isShown || !prefs.autoHide }
+
+    /// Fits the window to the dock's content without animating its position.
+    private func updateSize() {
         guard hosting != nil else { return }
-        let target = frame(shown: isShown || !prefs.autoHide)
-        hosting.frame = NSRect(origin: .zero, size: target.size)
-        guard target != panel.frame else { return }
-        if animated && prefs.animationDuration > 0 {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = prefs.animationDuration
-                panel.animator().setFrame(target, display: true)
+        let target = frame(shown: visible)
+        if hosting.frame.size != target.size {
+            hosting.frame = NSRect(origin: .zero, size: target.size)
+        }
+        if slide != nil {
+            // Mid-slide: resize now and steer the slide to the new end point.
+            if panel.frame.size != target.size {
+                panel.setFrame(NSRect(origin: panel.frame.origin, size: target.size), display: true)
             }
-        } else {
+            slide?.to = target.origin
+        } else if panel.frame != target {
             panel.setFrame(target, display: true)
+            panel.alphaValue = visible ? 1 : 0
         }
     }
 
     private func setShown(_ shown: Bool, animated: Bool) {
         guard shown != isShown else { return }
         isShown = shown
-        layout(animated: animated)
+        if !shown { model.hoveredID = nil }
+        let target = frame(shown: visible)
+        hosting.frame = NSRect(origin: .zero, size: target.size)
+        if panel.frame.size != target.size {
+            panel.setFrame(NSRect(origin: panel.frame.origin, size: target.size), display: true)
+        }
+        let alpha: CGFloat = visible ? 1 : 0
+        guard animated, prefs.animationDuration > 0 else {
+            slide = nil
+            panel.setFrameOrigin(target.origin)
+            panel.alphaValue = alpha
+            return
+        }
+        // Moving only the window origin is cheap: nothing inside has to redraw.
+        slide = Slide(from: panel.frame.origin, to: target.origin, fromAlpha: panel.alphaValue, toAlpha: alpha,
+                      start: CACurrentMediaTime(), duration: prefs.animationDuration)
+        if displayLink == nil {
+            // Use the screen's display link: a view's link stops firing while its window is offscreen.
+            let link = screen.displayLink(target: self, selector: #selector(stepSlide(_:)))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+    }
+
+    @objc private func stepSlide(_ link: CADisplayLink) {
+        guard let s = slide else {
+            displayLink?.invalidate()
+            displayLink = nil
+            return
+        }
+        let t = min(1, (CACurrentMediaTime() - s.start) / s.duration)
+        let eased = 1 - pow(1 - t, 3)   // ease-out: fast start, gentle stop
+        panel.setFrameOrigin(NSPoint(x: s.from.x + (s.to.x - s.from.x) * eased,
+                                     y: s.from.y + (s.to.y - s.from.y) * eased))
+        panel.alphaValue = s.fromAlpha + (s.toAlpha - s.fromAlpha) * CGFloat(min(1, t * 1.6))
+        if t >= 1 {
+            slide = nil
+            displayLink?.invalidate()
+            displayLink = nil
+        }
     }
 
     /// Reveal when the pointer touches the screen edge; hide shortly after it leaves.

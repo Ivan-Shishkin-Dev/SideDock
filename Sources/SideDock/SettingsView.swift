@@ -68,6 +68,7 @@ private struct GeneralTab: View {
                 }
             }
             Section("Apps") {
+                Toggle("Show Trash above Finder", isOn: $prefs.showTrash)
                 Toggle("Show running apps that aren't kept in the dock", isOn: $prefs.showRunningApps)
                 Toggle("Clicking the frontmost app hides it", isOn: $prefs.clickActiveToHide)
             }
@@ -133,6 +134,7 @@ private struct BehaviorTab: View {
                 LabeledContent("Open Settings", value: "⌘-click the dock")
                 LabeledContent("Reorder icons", value: "Drag them")
                 LabeledContent("Keep an app, folder or file", value: "Drop it on the dock")
+                LabeledContent("Remove an icon", value: "Drag it onto the Trash")
             }
         }
         .formStyle(.grouped)

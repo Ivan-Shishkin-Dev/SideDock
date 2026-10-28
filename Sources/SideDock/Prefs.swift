@@ -57,6 +57,7 @@ final class Prefs: ObservableObject {
     @Published var position: DockPosition = loadEnum("position", .center) { didSet { save(position.rawValue, "position") } }
     @Published var showMenuBarIcon: Bool = load("showMenuBarIcon", true) { didSet { save(showMenuBarIcon, "showMenuBarIcon") } }
     @Published var showRunningApps: Bool = load("showRunningApps", true) { didSet { save(showRunningApps, "showRunningApps") } }
+    @Published var showTrash: Bool = load("showTrash", true) { didSet { save(showTrash, "showTrash") } }
     @Published var clickActiveToHide: Bool = load("clickActiveToHide", false) { didSet { save(clickActiveToHide, "clickActiveToHide") } }
 
     // Appearance
@@ -86,12 +87,12 @@ final class Prefs: ObservableObject {
 
     /// Clears every setting (pinned items stay).
     func resetAll() {
-        let keys = ["edge", "position", "showMenuBarIcon", "showRunningApps", "clickActiveToHide", "iconSize",
+        let keys = ["edge", "position", "showMenuBarIcon", "showRunningApps", "showTrash", "clickActiveToHide", "iconSize",
                     "spacing", "magnify", "magnifyAmount", "cornerRadius", "edgeGap", "material", "showIndicators",
                     "showTooltips", "autoHide", "revealDelay", "hideDelay", "animationDuration", "defaultSort",
                     "defaultDisplay", "stackColumns", "showBadges"]
         keys.forEach { Self.d.removeObject(forKey: $0) }
-        edge = .left; position = .center; showMenuBarIcon = true; showRunningApps = true; clickActiveToHide = false
+        edge = .left; position = .center; showMenuBarIcon = true; showRunningApps = true; showTrash = true; clickActiveToHide = false
         iconSize = 44; spacing = 6; magnify = true; magnifyAmount = 1.2; cornerRadius = 18; edgeGap = 6
         material = .hud; showIndicators = true; showTooltips = true
         autoHide = true; revealDelay = 0; hideDelay = 0.4; animationDuration = 0.18

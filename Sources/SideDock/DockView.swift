@@ -13,6 +13,9 @@ struct DockView: View {
 
     var body: some View {
         VStack(spacing: prefs.spacing) {
+            if prefs.showTrash {
+                TrashIcon(model: model, prefs: prefs)
+            }
             ForEach(model.pinnedItems) { item in
                 DockIcon(item: item, model: model, prefs: prefs)
             }
@@ -42,9 +45,9 @@ struct DockIcon: View {
     let item: DockItem
     @ObservedObject var model: DockModel
     @ObservedObject var prefs: Prefs
-    @State private var hovering = false
 
     private var size: CGFloat { prefs.iconSize }
+    private var hovering: Bool { model.hoveredID == item.id }
 
     private var stackOpen: Binding<Bool> {
         Binding(get: { model.openStack == item.id },
@@ -60,12 +63,14 @@ struct DockIcon: View {
                 .overlay(alignment: .topTrailing) { badge }
                 .scaleEffect(hovering && prefs.magnify ? prefs.magnifyAmount : 1,
                              anchor: prefs.edge == .left ? .leading : .trailing)
-                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: hovering)
+                .animation(.spring(response: 0.2, dampingFraction: 0.82), value: hovering)
             if prefs.edge == .right { dot }
         }
         .zIndex(hovering ? 1 : 0)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover { inside in
+            if inside { model.hoveredID = item.id } else if model.hoveredID == item.id { model.hoveredID = nil }
+        }
         .onTapGesture { click() }
         .onDrag {
             model.dragging = item.id
@@ -191,6 +196,65 @@ struct DockIcon: View {
 
 extension Notification.Name {
     static let openSideDockSettings = Notification.Name("openSideDockSettings")
+}
+
+// MARK: - Trash
+
+/// Click to open the Trash. Drop files on it to move them to the Trash.
+/// Dropping a dock icon on it only removes that icon from SideDock.
+struct TrashIcon: View {
+    @ObservedObject var model: DockModel
+    @ObservedObject var prefs: Prefs
+    @State private var targeted = false
+
+    private var size: CGFloat { prefs.iconSize }
+    private var hovering: Bool { model.hoveredID == "trash" }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if prefs.edge == .left { Color.clear.frame(width: 4, height: 4) }
+            Image(nsImage: model.trashIcon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: size, height: size)
+                .background {
+                    if targeted {
+                        RoundedRectangle(cornerRadius: size * 0.26)
+                            .fill(Color.accentColor.opacity(0.2))
+                            .padding(-4)
+                    }
+                }
+                .scaleEffect((hovering || targeted) && prefs.magnify ? prefs.magnifyAmount : 1,
+                             anchor: prefs.edge == .left ? .leading : .trailing)
+                .animation(.spring(response: 0.2, dampingFraction: 0.82), value: hovering || targeted)
+            if prefs.edge == .right { Color.clear.frame(width: 4, height: 4) }
+        }
+        .zIndex(hovering ? 1 : 0)
+        .contentShape(Rectangle())
+        .onHover { inside in
+            if inside { model.hoveredID = "trash" } else if model.hoveredID == "trash" { model.hoveredID = nil }
+        }
+        .onTapGesture { model.openTrash() }
+        .onDrop(of: [.fileURL, .sideDockItem], isTargeted: $targeted) { providers in
+            if let dragged = model.dragging {
+                model.removeFromDock(dragged)
+                model.dragging = nil
+                return true
+            }
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in model.moveToTrash(url) }
+                }
+            }
+            return true
+        }
+        .help(prefs.showTooltips ? "Trash" : "")
+        .contextMenu {
+            Button("Open Trash") { model.openTrash() }
+            Button("Empty Trash…") { model.emptyTrash() }
+        }
+    }
 }
 
 // MARK: - Drag and drop
@@ -393,13 +457,24 @@ struct StackView: View {
     @ObservedObject var model: DockModel
     @ObservedObject var prefs: Prefs
     @State private var path: [URL] = []
+    @State private var entries: [StackEntry]
+
+    init(root: URL, model: DockModel, prefs: Prefs) {
+        self.root = root
+        self.model = model
+        self.prefs = prefs
+        _entries = State(initialValue: model.contents(of: root, sort: model.sort(for: root.path)))
+    }
 
     private var current: URL { path.last ?? root }
     private var columns: Int { Int(prefs.stackColumns) }
     private let tile: CGFloat = 84
 
+    private func reload() {
+        entries = model.contents(of: current, sort: model.sort(for: root.path))
+    }
+
     var body: some View {
-        let entries = model.contents(of: current, sort: model.sort(for: root.path))
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 if !path.isEmpty {
@@ -438,6 +513,8 @@ struct StackView: View {
             .padding(10)
         }
         .frame(width: CGFloat(columns) * tile + CGFloat(columns - 1) * 8 + 24)
+        .onChange(of: path) { _, _ in reload() }
+        .onChange(of: model.prefsVersion) { _, _ in reload() }
     }
 
     private func open(_ entry: StackEntry) {
@@ -478,22 +555,39 @@ struct StackTile: View {
 }
 
 /// File icon that upgrades to a Quick Look thumbnail (images, PDFs, videos) when one exists.
+/// Icons and thumbnails are kept in memory so redraws never hit the disk.
+@MainActor
+enum IconCache {
+    static let icons = NSCache<NSString, NSImage>()
+    static let thumbnails = NSCache<NSString, NSImage>()
+
+    static func icon(_ path: String) -> NSImage {
+        if let cached = icons.object(forKey: path as NSString) { return cached }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        icons.setObject(image, forKey: path as NSString)
+        return image
+    }
+}
+
 struct FileIcon: View {
     let url: URL
     let size: CGFloat
     @State private var thumbnail: NSImage?
 
     var body: some View {
-        Image(nsImage: thumbnail ?? NSWorkspace.shared.icon(forFile: url.path))
+        Image(nsImage: thumbnail ?? IconCache.thumbnails.object(forKey: url.path as NSString) ?? IconCache.icon(url.path))
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
             .frame(width: size, height: size)
             .task(id: url) {
+                let key = url.path as NSString
+                if let cached = IconCache.thumbnails.object(forKey: key) { thumbnail = cached; return }
                 let request = QLThumbnailGenerator.Request(
-                    fileAt: url, size: CGSize(width: size, height: size),
+                    fileAt: url, size: CGSize(width: 96, height: 96),
                     scale: NSScreen.main?.backingScaleFactor ?? 2, representationTypes: .thumbnail)
                 if let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
+                    IconCache.thumbnails.setObject(rep.nsImage, forKey: key)
                     thumbnail = rep.nsImage
                 }
             }

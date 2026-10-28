@@ -46,6 +46,8 @@ final class DockModel: ObservableObject {
     @Published private(set) var folderPreviews: [String: [StackEntry]] = [:]
     @Published var openStack: String?          // folder or group whose popover is open
     @Published var mergeTarget: String?        // icon highlighted while an app is dragged onto it
+    @Published var hoveredID: String?
+    @Published private(set) var trashFull = false          // icon under the pointer (cleared when the dock hides)
     @Published private(set) var groups: [String: AppGroup] = DockModel.loadGroups()
     @Published var prefsVersion = 0            // bumps when folder settings change
     var dragging: String?                      // item being reordered
@@ -193,6 +195,67 @@ final class DockModel: ObservableObject {
             next[item.id] = Array(contents(of: item.url, sort: sort(for: item.id)).prefix(4))
         }
         if next != folderPreviews { folderPreviews = next }
+        updateTrash()
+    }
+
+    // MARK: Trash
+
+    var trashURL: URL {
+        FileManager.default.urls(for: .trashDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")
+    }
+
+    var trashIcon: NSImage {
+        NSImage(named: trashFull ? NSImage.trashFullName : NSImage.trashEmptyName)
+            ?? NSWorkspace.shared.icon(forFile: trashURL.path)
+    }
+
+    /// Full/empty icon. If macOS won't let SideDock look inside the Trash, it shows as empty.
+    func updateTrash() {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: trashURL.path)) ?? []
+        let full = names.contains { $0 != ".DS_Store" }
+        if full != trashFull { trashFull = full }
+    }
+
+    func openTrash() {
+        openStack = nil
+        NSWorkspace.shared.open(trashURL)
+    }
+
+    /// Moves a file to the Trash (recoverable, same as ⌘⌫ in Finder).
+    func moveToTrash(_ url: URL) {
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            NSSound.beep()
+        }
+        trashFull = true
+        refresh()
+    }
+
+    /// Asks first, then has Finder empty the Trash. This deletes files for good.
+    func emptyTrash() {
+        let alert = NSAlert()
+        alert.messageText = "Empty the Trash?"
+        alert.informativeText = "Items in the Trash will be deleted immediately. You can't undo this."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Empty Trash")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var error: NSDictionary?
+        NSAppleScript(source: "tell application \"Finder\" to empty trash")?.executeAndReturnError(&error)
+        updateTrash()
+    }
+
+    /// Removes an icon from SideDock without touching the file on disk.
+    func removeFromDock(_ id: String) {
+        if let item = pinnedItems.first(where: { $0.id == id }) {
+            unpin(item)
+        } else if let groupID = groups.first(where: { $0.value.apps.contains(id) })?.key {
+            removeFromGroup(id, groupID)
+            pinnedPaths.removeAll { $0 == id }
+        }
     }
 
     // MARK: Badges
