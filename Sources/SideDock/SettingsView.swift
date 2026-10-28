@@ -148,10 +148,15 @@ private struct ItemsTab: View {
             List {
                 ForEach(model.pinnedItems) { item in
                     HStack {
-                        Image(nsImage: model.icon(for: item.id)).resizable().frame(width: 22, height: 22)
+                        if item.kind == .group {
+                            StackPreview(urls: item.members.prefix(4).map { URL(fileURLWithPath: $0) }, size: 22)
+                        } else {
+                            Image(nsImage: model.icon(for: item.id)).resizable().frame(width: 22, height: 22)
+                        }
                         VStack(alignment: .leading) {
                             Text(item.name)
-                            Text(item.id).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            Text(item.kind == .group ? "Group: " + item.members.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }.joined(separator: ", ") : item.id)
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         }
                         Spacer()
                         Button { model.unpin(item) } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
@@ -165,6 +170,7 @@ private struct ItemsTab: View {
             HStack {
                 Button("Add App…") { choose(folders: false) }
                 Button("Add Folder…") { choose(folders: true) }
+                Button("New Group…") { chooseGroup() }
                 Menu("Add Shortcut") {
                     Button("Home") { model.pin(NSHomeDirectory()) }
                     Button("Downloads") { model.pin(NSHomeDirectory() + "/Downloads") }
@@ -178,6 +184,21 @@ private struct ItemsTab: View {
             }
         }
         .padding(20)
+    }
+
+    /// Pick several apps to put into a new group.
+    private func chooseGroup() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose the apps for the new group (⌘-click to pick several)"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.application]
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            let id = model.createGroup(with: panel.urls.map(\.path))
+            model.promptRename(id)
+        }
     }
 
     private func choose(folders: Bool) {

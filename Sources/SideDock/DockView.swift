@@ -32,7 +32,7 @@ struct DockView: View {
         .padding(prefs.edge == .left ? .trailing : .leading, magnifyRoom)
         .fixedSize()
         .contentShape(Rectangle())
-        .onDrop(of: [.fileURL, .sideDockItem], delegate: ItemDrop(target: nil, model: model))
+        .onDrop(of: [.fileURL, .sideDockItem], delegate: ItemDrop(target: nil, model: model, height: 0))
     }
 }
 
@@ -56,6 +56,7 @@ struct DockIcon: View {
             if prefs.edge == .left { dot }
             iconImage
                 .frame(width: size, height: size)
+                .background { mergeRing }
                 .overlay(alignment: .topTrailing) { badge }
                 .scaleEffect(hovering && prefs.magnify ? prefs.magnifyAmount : 1,
                              anchor: prefs.edge == .left ? .leading : .trailing)
@@ -76,10 +77,14 @@ struct DockIcon: View {
             }
             return provider
         }
-        .onDrop(of: [.fileURL, .sideDockItem], delegate: ItemDrop(target: item, model: model))
+        .onDrop(of: [.fileURL, .sideDockItem], delegate: ItemDrop(target: item, model: model, height: size))
         .help(prefs.showTooltips ? item.name : "")
         .popover(isPresented: stackOpen, arrowEdge: prefs.edge == .left ? .trailing : .leading) {
-            StackView(root: item.url, model: model, prefs: prefs)
+            if item.kind == .group {
+                GroupView(item: item, model: model, prefs: prefs)
+            } else {
+                StackView(root: item.url, model: model, prefs: prefs)
+            }
         }
         .contextMenu { menu }
     }
@@ -93,16 +98,32 @@ struct DockIcon: View {
     }
 
     @ViewBuilder private var iconImage: some View {
-        if item.kind == .folder, model.display(for: item.id) == .stack,
+        if item.kind == .group {
+            StackPreview(urls: item.members.prefix(4).map { URL(fileURLWithPath: $0) }, size: size)
+        } else if item.kind == .folder, model.display(for: item.id) == .stack,
            let entries = model.folderPreviews[item.id], !entries.isEmpty {
-            StackPreview(entries: entries, size: size)
+            StackPreview(urls: entries.map(\.url), size: size)
         } else {
             Image(nsImage: model.icon(for: item.id)).resizable().interpolation(.high)
         }
     }
 
+    /// Ring shown while an app is held over this icon to make (or add to) a group.
+    @ViewBuilder private var mergeRing: some View {
+        if model.mergeTarget == item.id {
+            RoundedRectangle(cornerRadius: size * 0.26)
+                .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                .background(RoundedRectangle(cornerRadius: size * 0.26).fill(Color.accentColor.opacity(0.18)))
+                .padding(-4)
+        }
+    }
+
+    private var badgeText: String? {
+        item.kind == .group ? model.groupBadge(item) : model.badges[item.id]
+    }
+
     @ViewBuilder private var badge: some View {
-        if prefs.showBadges, let text = model.badges[item.id] {
+        if prefs.showBadges, let text = badgeText {
             Text(text)
                 .font(.system(size: max(9, size * 0.24), weight: .semibold))
                 .foregroundStyle(.white)
@@ -137,12 +158,27 @@ struct DockIcon: View {
             }
             Divider()
         }
-        if item.isPinned {
-            Button("Remove from Dock") { model.unpin(item) }
+        if item.kind == .group {
+            Button("Rename Group…") { model.promptRename(item.id) }
+            Button("Ungroup") { model.ungroup(item.id) }
+            Button("Remove Group from Dock") { model.unpin(item) }
         } else {
-            Button("Keep in Dock") { model.pin(item.id) }
+            if item.kind == .app {
+                Menu("Add to Group") {
+                    ForEach(model.groupList, id: \.id) { group in
+                        Button(group.name) { model.addToGroup(item.id, group.id) }
+                    }
+                    if !model.groupList.isEmpty { Divider() }
+                    Button("New Group") { model.createGroup(with: [item.id]) }
+                }
+            }
+            if item.isPinned {
+                Button("Remove from Dock") { model.unpin(item) }
+            } else {
+                Button("Keep in Dock") { model.pin(item.id) }
+            }
+            Button("Show in Finder") { model.showInFinder(item.url) }
         }
-        Button("Show in Finder") { model.showInFinder(item.url) }
         if item.isRunning {
             Divider()
             Button("Hide") { model.hide(item) }
@@ -159,49 +195,83 @@ extension Notification.Name {
 
 // MARK: - Drag and drop
 
-/// Reorders icons dragged inside the dock, and pins apps, folders or files dropped from Finder.
+/// Handles drops on the dock:
+/// - an app held over the middle of another app (or a group) makes or joins a group,
+/// - over the top/bottom half it reorders,
+/// - apps, folders or files from Finder get kept in the dock.
 struct ItemDrop: DropDelegate {
     let target: DockItem?   // nil = empty area (append to the end)
     let model: DockModel
+    let height: CGFloat
+
+    private func isInternal(_ info: DropInfo) -> Bool { info.hasItemsConforming(to: [.sideDockItem]) }
+
+    private func wantsMerge(_ info: DropInfo) -> Bool {
+        guard let target, target.isPinned, target.kind == .app || target.kind == .group, height > 0 else { return false }
+        let y = info.location.y
+        guard y > height * 0.2 && y < height * 0.8 else { return false }
+        if isInternal(info) {
+            guard let dragged = model.dragging else { return false }
+            return dragged.hasSuffix(".app") && dragged != target.id
+        }
+        return true
+    }
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [.sideDockItem, .fileURL])
     }
 
-    func dropEntered(info: DropInfo) {
-        guard info.hasItemsConforming(to: [.sideDockItem]),
-              let dragged = model.dragging, let target, target.isPinned, dragged != target.id else { return }
-        withAnimation(.easeInOut(duration: 0.15)) { model.pin(dragged, before: target.id) }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        if let target, wantsMerge(info) {
+            if model.mergeTarget != target.id { model.mergeTarget = target.id }
+            return DropProposal(operation: .copy)
+        }
+        if model.mergeTarget != nil { model.mergeTarget = nil }
+        if isInternal(info), let dragged = model.dragging, let target, target.isPinned, dragged != target.id {
+            let before = info.location.y < height / 2
+            withAnimation(.easeInOut(duration: 0.15)) { model.place(dragged, relativeTo: target.id, before: before) }
+        }
+        return DropProposal(operation: isInternal(info) ? .move : .copy)
     }
 
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: info.hasItemsConforming(to: [.sideDockItem]) ? .move : .copy)
+    func dropExited(info: DropInfo) {
+        if let target, model.mergeTarget == target.id { model.mergeTarget = nil }
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        if info.hasItemsConforming(to: [.sideDockItem]) {
-            if let dragged = model.dragging, target?.isPinned != true, !model.pinnedPaths.contains(dragged) {
+        let merging = target != nil && model.mergeTarget == target?.id
+        model.mergeTarget = nil
+        if isInternal(info) {
+            defer { model.dragging = nil }
+            if merging, let dragged = model.dragging, let target {
+                model.merge(dragged, into: target)
+            } else if let dragged = model.dragging, target?.isPinned != true, !model.pinnedPaths.contains(dragged) {
                 model.pin(dragged)   // a running app dragged into the dock gets kept
             }
-            model.dragging = nil
             return true
         }
         let before = target?.isPinned == true ? target?.id : nil
         for provider in info.itemProviders(for: [.fileURL]) {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                Task { @MainActor in model.pin(url.path, before: before) }
+                Task { @MainActor in
+                    if merging, let target, url.pathExtension == "app" {
+                        model.merge(url.path, into: target)
+                    } else {
+                        model.pin(url.path, before: before)
+                    }
+                }
             }
         }
         return true
     }
 }
 
-// MARK: - Folder stacks
+// MARK: - Folder stacks and groups
 
-/// 2x2 grid of a folder's newest items, like the macOS Dock's stack icon.
+/// 2x2 grid of icons, like the macOS Dock's stack icon. Used for folders and app groups.
 struct StackPreview: View {
-    let entries: [StackEntry]
+    let urls: [URL]
     let size: CGFloat
 
     var body: some View {
@@ -210,11 +280,113 @@ struct StackPreview: View {
             .fill(Color.primary.opacity(0.12))
             .overlay {
                 LazyVGrid(columns: [GridItem(.fixed(cell), spacing: 3), GridItem(.fixed(cell), spacing: 3)], spacing: 3) {
-                    ForEach(entries) { FileIcon(url: $0.url, size: cell) }
+                    ForEach(urls, id: \.self) { FileIcon(url: $0, size: cell) }
                 }
             }
     }
 }
+
+/// Popover for an app group: click to open, right-click to remove, drop apps on it to add.
+struct GroupView: View {
+    let item: DockItem
+    @ObservedObject var model: DockModel
+    @ObservedObject var prefs: Prefs
+    private let tile: CGFloat = 84
+
+    var body: some View {
+        let columns = max(2, min(Int(prefs.stackColumns), item.members.count))
+        let rows = (item.members.count + columns - 1) / columns
+        VStack(spacing: 0) {
+            HStack {
+                Text(item.name).font(.headline)
+                Spacer()
+                Button { model.promptRename(item.id) } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.borderless)
+                    .help("Rename group")
+            }
+            .padding(12)
+            Divider()
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(tile), spacing: 8), count: columns), spacing: 10) {
+                    ForEach(item.members, id: \.self) { path in
+                        GroupAppTile(path: path, groupID: item.id, model: model, showBadge: prefs.showBadges)
+                    }
+                }
+                .padding(12)
+            }
+            .frame(height: min(CGFloat(max(rows, 1)) * 112 + 24, 440))
+            Divider()
+            Text("Drop apps here to add them").font(.caption).foregroundStyle(.secondary).padding(8)
+        }
+        .frame(width: CGFloat(columns) * tile + CGFloat(columns - 1) * 8 + 24)
+        .onDrop(of: [.fileURL, .sideDockItem], isTargeted: nil) { providers in
+            if let dragged = model.dragging, dragged.hasSuffix(".app") {
+                model.addToGroup(dragged, item.id)
+                model.dragging = nil
+                return true
+            }
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, url.pathExtension == "app" else { return }
+                    Task { @MainActor in model.addToGroup(url.path, item.id) }
+                }
+            }
+            return true
+        }
+    }
+}
+
+struct GroupAppTile: View {
+    let path: String
+    let groupID: String
+    @ObservedObject var model: DockModel
+    let showBadge: Bool
+    @State private var hovering = false
+
+    private var name: String {
+        FileManager.default.displayName(atPath: path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    var body: some View {
+        let running = model.isRunning(path)
+        VStack(spacing: 3) {
+            Image(nsImage: model.icon(for: path))
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 52, height: 52)
+                .overlay(alignment: .topTrailing) {
+                    if showBadge, let text = model.badges[path] {
+                        Text(text)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(Capsule().fill(Color.red))
+                            .offset(x: 4, y: -4)
+                    }
+                }
+            Text(name).font(.system(size: 11)).lineLimit(1).frame(width: 80)
+            Circle().fill(Color.primary.opacity(0.7)).frame(width: 4, height: 4).opacity(running ? 1 : 0)
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 8).fill(hovering ? Color.primary.opacity(0.1) : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { model.openApp(path) }
+        .contextMenu {
+            Button("Open") { model.openApp(path) }
+            Button("Remove from Group") { model.removeFromGroup(path, groupID) }
+            Button("Show in Finder") { model.showInFinder(URL(fileURLWithPath: path)) }
+            if running {
+                Divider()
+                Button("Quit") {
+                    NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.path == path }.forEach { $0.terminate() }
+                }
+            }
+        }
+    }
+}
+
 
 struct StackView: View {
     let root: URL
