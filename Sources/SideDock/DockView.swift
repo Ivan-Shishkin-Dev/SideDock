@@ -61,6 +61,7 @@ struct DockIcon: View {
                 .frame(width: size, height: size)
                 .background { mergeRing }
                 .overlay(alignment: .topTrailing) { badge }
+                .overlay(alignment: .bottomLeading) { workspaceTag }
                 .scaleEffect(hovering && prefs.magnify ? prefs.magnifyAmount : 1,
                              anchor: prefs.edge == .left ? .leading : .trailing)
                 .animation(.spring(response: 0.2, dampingFraction: 0.82), value: hovering)
@@ -136,6 +137,28 @@ struct DockIcon: View {
                 .frame(minWidth: size * 0.36, minHeight: size * 0.36)
                 .background(Capsule().fill(Color.red))
                 .offset(x: 4, y: -4)
+        }
+    }
+
+    /// AeroSpace workspace(s) this app's windows live on. Click to jump there.
+    @ViewBuilder private var workspaceTag: some View {
+        let spaces = prefs.showWorkspaces ? model.workspaces(for: item) : []
+        if !spaces.isEmpty {
+            let focused = model.aero.focused
+            HStack(spacing: 2) {
+                ForEach(spaces.prefix(3), id: \.self) { ws in
+                    Text(ws)
+                        .font(.system(size: max(8, size * 0.22), weight: .bold, design: .rounded))
+                        .foregroundStyle(ws == focused ? Color.white : Color.primary)
+                        .padding(.horizontal, 3)
+                        .frame(minWidth: size * 0.32, minHeight: size * 0.32)
+                        .background(RoundedRectangle(cornerRadius: 4)
+                            .fill(ws == focused ? Color.accentColor : Color(nsColor: .windowBackgroundColor).opacity(0.9)))
+                        .onTapGesture { AeroSpace.focus(ws) }
+                }
+            }
+            .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+            .offset(x: -4, y: 4)
         }
     }
 

@@ -104,6 +104,16 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         slowTick()
 
+        // AeroSpace workspace numbers: poll fast, and right away when apps switch.
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshAero() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
+                                                          object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshAero() }
+        }
+        refreshAero()
+
         // Start hidden after a moment so you can see where it lives.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self, self.prefs.autoHide else { return }
@@ -124,6 +134,22 @@ final class AppController: NSObject, NSApplicationDelegate {
         if !prefs.autoHide { isShown = true }
         model.reloadFolderPreviews()
         updateSize()
+    }
+
+    private var aeroBusy = false
+
+    private func refreshAero() {
+        guard prefs.showWorkspaces, AeroSpace.binary != nil, !aeroBusy else { return }
+        aeroBusy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let snap = AeroSpace.read()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.aeroBusy = false
+                    if let snap { self.model.setAero(snap) }
+                }
+            }
+        }
     }
 
     /// Refreshes folder stacks and badges every couple of seconds.

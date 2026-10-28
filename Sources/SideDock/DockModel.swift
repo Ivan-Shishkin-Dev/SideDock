@@ -49,6 +49,7 @@ final class DockModel: ObservableObject {
     @Published var hoveredID: String?
     @Published private(set) var trashFull = false          // icon under the pointer (cleared when the dock hides)
     @Published private(set) var groups: [String: AppGroup] = DockModel.loadGroups()
+    @Published private(set) var aero = AeroSpace.Snapshot()   // AeroSpace workspace per app
     @Published var prefsVersion = 0            // bumps when folder settings change
     var dragging: String?                      // item being reordered
 
@@ -262,6 +263,18 @@ final class DockModel: ObservableObject {
 
     func setBadges(_ new: [String: String]) {
         if new != badges { badges = new }
+    }
+
+    func setAero(_ new: AeroSpace.Snapshot) {
+        if new != aero { aero = new }
+    }
+
+    /// Workspaces holding this item's windows (for a group: all its apps).
+    func workspaces(for item: DockItem) -> [String] {
+        let paths = item.kind == .group ? item.members : [item.id]
+        var out: [String] = []
+        for path in paths { for ws in aero.workspaces[path] ?? [] where !out.contains(ws) { out.append(ws) } }
+        return out
     }
 
     // MARK: Actions

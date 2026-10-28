@@ -68,6 +68,7 @@ private struct GeneralTab: View {
                 }
             }
             Section("Apps") {
+                Toggle("Show AeroSpace workspace on each app", isOn: $prefs.showWorkspaces)
                 Toggle("Show Trash above Finder", isOn: $prefs.showTrash)
                 Toggle("Show running apps that aren't kept in the dock", isOn: $prefs.showRunningApps)
                 Toggle("Clicking the frontmost app hides it", isOn: $prefs.clickActiveToHide)
