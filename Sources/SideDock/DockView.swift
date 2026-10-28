@@ -60,8 +60,10 @@ struct DockIcon: View {
             iconImage
                 .frame(width: size, height: size)
                 .background { mergeRing }
+                .brightness(hovering ? 0.12 : 0)
+                .shadow(color: .white.opacity(hovering ? 0.55 : 0), radius: hovering ? 8 : 0)
                 .overlay(alignment: .topTrailing) { badge }
-                .overlay(alignment: .bottomLeading) { workspaceTag }
+                .overlay { workspaceTag }
                 .scaleEffect(hovering && prefs.magnify ? prefs.magnifyAmount : 1,
                              anchor: prefs.edge == .left ? .leading : .trailing)
                 .animation(.spring(response: 0.2, dampingFraction: 0.82), value: hovering)
@@ -140,26 +142,44 @@ struct DockIcon: View {
         }
     }
 
-    /// AeroSpace workspace(s) this app's windows live on. Click to jump there.
+    /// AeroSpace workspace(s) this app's windows live on. Click a tag to jump there.
+    /// Groups get one tag per app, in the corner matching that app's spot in the icon.
     @ViewBuilder private var workspaceTag: some View {
-        let spaces = prefs.showWorkspaces ? model.workspaces(for: item) : []
-        if !spaces.isEmpty {
-            let focused = model.aero.focused
-            HStack(spacing: 2) {
-                ForEach(spaces.prefix(3), id: \.self) { ws in
-                    Text(ws)
-                        .font(.system(size: max(8, size * 0.22), weight: .bold, design: .rounded))
-                        .foregroundStyle(ws == focused ? Color.white : Color.primary)
-                        .padding(.horizontal, 3)
-                        .frame(minWidth: size * 0.32, minHeight: size * 0.32)
-                        .background(RoundedRectangle(cornerRadius: 4)
-                            .fill(ws == focused ? Color.accentColor : Color(nsColor: .windowBackgroundColor).opacity(0.9)))
-                        .onTapGesture { AeroSpace.focus(ws) }
+        if prefs.showWorkspaces {
+            if item.kind == .group {
+                let corners: [Alignment] = [.topLeading, .topTrailing, .bottomLeading, .bottomTrailing]
+                let offsets: [CGSize] = [CGSize(width: -5, height: -5), CGSize(width: 5, height: -5),
+                                         CGSize(width: -5, height: 5), CGSize(width: 5, height: 5)]
+                ZStack {
+                    ForEach(Array(item.members.prefix(4).enumerated()), id: \.offset) { i, path in
+                        if let ws = model.aero.workspaces[path]?.first {
+                            Color.clear.overlay(alignment: corners[i]) { tag(ws, small: true).offset(offsets[i]) }
+                        }
+                    }
+                }
+            } else {
+                let spaces = model.workspaces(for: item)
+                if !spaces.isEmpty {
+                    HStack(spacing: 2) { ForEach(spaces.prefix(3), id: \.self) { tag($0, small: false) } }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .offset(x: -4, y: 4)
                 }
             }
-            .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
-            .offset(x: -4, y: 4)
         }
+    }
+
+    private func tag(_ ws: String, small: Bool) -> some View {
+        let focused = ws == model.aero.focused
+        let side = size * (small ? 0.27 : 0.32)
+        return Text(ws)
+            .font(.system(size: max(7, side * 0.68), weight: .bold, design: .rounded))
+            .foregroundStyle(focused ? Color.white : Color.primary)
+            .padding(.horizontal, 2)
+            .frame(minWidth: side, minHeight: side)
+            .background(RoundedRectangle(cornerRadius: 4)
+                .fill(focused ? Color.accentColor : Color(nsColor: .windowBackgroundColor).opacity(0.92)))
+            .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+            .onTapGesture { AeroSpace.focus(ws) }
     }
 
     private var dot: some View {
