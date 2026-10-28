@@ -1,0 +1,4 @@
+.build/
+SideDock.app/
+.DS_Store
+.swiftpm/
