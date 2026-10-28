@@ -421,8 +421,6 @@ struct GroupView: View {
                 .padding(8)
             }
             .frame(height: min(CGFloat(max(rows, 1)) * 84 + 16, 440))
-            Divider()
-            Text("Drop apps here to add them").font(.caption).foregroundStyle(.secondary).padding(8)
         }
         .frame(width: max(200, CGFloat(columns) * tile + CGFloat(columns - 1) * 2 + 16))
         .onDrop(of: [.fileURL, .sideDockItem], isTargeted: nil) { providers in
