@@ -84,6 +84,7 @@ final class Prefs: ObservableObject {
 
     // AeroSpace
     @Published var showWorkspaces: Bool = load("showWorkspaces", true) { didSet { save(showWorkspaces, "showWorkspaces") } }
+    @Published var keyboardGrid: Bool = load("keyboardGrid", true) { didSet { save(keyboardGrid, "keyboardGrid") } }
 
     // Badges
     @Published var showBadges: Bool = load("showBadges", false) { didSet { save(showBadges, "showBadges") } }
@@ -93,12 +94,12 @@ final class Prefs: ObservableObject {
         let keys = ["edge", "position", "showMenuBarIcon", "showRunningApps", "showTrash", "clickActiveToHide", "iconSize",
                     "spacing", "magnify", "magnifyAmount", "cornerRadius", "edgeGap", "material", "showIndicators",
                     "showTooltips", "autoHide", "revealDelay", "hideDelay", "animationDuration", "defaultSort",
-                    "defaultDisplay", "stackColumns", "showBadges", "showWorkspaces"]
+                    "defaultDisplay", "stackColumns", "showBadges", "showWorkspaces", "keyboardGrid"]
         keys.forEach { Self.d.removeObject(forKey: $0) }
         edge = .left; position = .center; showMenuBarIcon = true; showRunningApps = true; showTrash = true; clickActiveToHide = false
         iconSize = 44; spacing = 6; magnify = true; magnifyAmount = 1.2; cornerRadius = 18; edgeGap = 6
         material = .hud; showIndicators = true; showTooltips = true
         autoHide = true; revealDelay = 0; hideDelay = 0.4; animationDuration = 0.18
-        defaultSort = .name; defaultDisplay = .stack; stackColumns = 4; showBadges = false; showWorkspaces = true
+        defaultSort = .name; defaultDisplay = .stack; stackColumns = 4; showBadges = false; showWorkspaces = true; keyboardGrid = true
     }
 }

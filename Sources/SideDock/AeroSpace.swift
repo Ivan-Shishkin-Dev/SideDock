@@ -7,6 +7,8 @@ enum AeroSpace {
 
     struct Snapshot: Equatable {
         var workspaces: [String: [String]] = [:]   // app bundle path -> workspaces, in order
+        var apps: [String: [String]] = [:]         // workspace -> app bundle paths, in order
+        var all: [String] = []                     // every workspace AeroSpace knows
         var focused: String?
     }
 
@@ -20,10 +22,33 @@ enum AeroSpace {
             if !snap.workspaces[parts[0], default: []].contains(parts[1]) {
                 snap.workspaces[parts[0], default: []].append(parts[1])
             }
+            if !snap.apps[parts[1], default: []].contains(parts[0]) {
+                snap.apps[parts[1], default: []].append(parts[0])
+            }
             if parts[2] == "true" { snap.focused = parts[1] }
         }
+        snap.all = run(["list-workspaces", "--all"])?.split(separator: "\n").map(String.init) ?? []
         if snap.focused == nil { snap.focused = run(["list-workspaces", "--focused"])?.trimmingCharacters(in: .whitespacesAndNewlines) }
         return snap
+    }
+
+    /// Workspaces laid out like the keyboard: 1 2 3 / Q W E / A S D / Z X C.
+    /// Returns rows of cells; nil marks a key with no workspace (a blank spot that keeps the shape).
+    static func keyboardRows(_ all: [String]) -> [[String?]] {
+        let keys = ["1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"].map { $0.map(String.init) }
+        let have = Set(all.map { $0.uppercased() })
+        let byUpper = Dictionary(all.map { ($0.uppercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        let width = keys.compactMap { row in row.lastIndex(where: have.contains).map { $0 + 1 } }.max() ?? 0
+        var rows = keys.filter { $0.prefix(width).contains(where: have.contains) }
+            .map { $0.prefix(width).map { byUpper[$0] } }
+        // Named workspaces that aren't single keys go on extra rows.
+        let others = all.filter { !keys.joined().contains($0.uppercased()) }
+        let cols = max(width, 1)
+        for start in stride(from: 0, to: others.count, by: cols) {
+            let chunk = others[start..<min(start + cols, others.count)].map { Optional($0) }
+            rows.append(chunk + Array(repeating: nil, count: cols - chunk.count))
+        }
+        return rows
     }
 
     static func focus(_ workspace: String) {

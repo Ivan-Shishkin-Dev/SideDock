@@ -28,7 +28,69 @@ struct DockView: View {
         prefs.magnify ? prefs.iconSize * (prefs.magnifyAmount - 1) : 0
     }
 
+    private var useGrid: Bool { prefs.keyboardGrid && model.aeroActive && !model.aero.all.isEmpty }
+
     var body: some View {
+        Group {
+            if useGrid { gridBody } else { columnBody }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .padding(prefs.edge == .left ? .trailing : .leading, useGrid ? 0 : magnifyRoom)
+        .fixedSize()
+        .contentShape(Rectangle())
+        .coordinateSpace(name: "dock")
+        .onPreferenceChange(IconFrames.self) { frames = $0 }
+        .onContinuousHover(coordinateSpace: .named("dock")) { phase in
+            switch phase {
+            case .active(let pt):
+                // Only the icon square directly under the pointer lights up.
+                let id = frames.first { $0.value.contains(pt) }?.key
+                if model.hoveredID != id { model.hoveredID = id }
+            case .ended:
+                if model.hoveredID != nil { model.hoveredID = nil }
+            }
+        }
+        .onDrop(of: [.fileURL, .sideDockItem], delegate: ItemDrop(target: nil, model: model, height: 0))
+    }
+
+    /// Everything that isn't on a workspace (Trash, folders, closed apps) on top, a line, then the
+    /// workspaces in keyboard rows: 1 2 3 / Q W E / A S D.
+    private var gridBody: some View {
+        let rows = AeroSpace.keyboardRows(model.aero.all)
+        let cols = rows.map(\.count).max() ?? 1
+        let gap = prefs.spacing + 10   // wider columns so the grid reads like keys
+        let rest = model.pinnedItems.filter { $0.kind != .app || model.workspaces(for: $0).isEmpty }
+        let columns = Array(repeating: GridItem(.fixed(prefs.iconSize), spacing: gap), count: cols)
+        return VStack(spacing: prefs.spacing) {
+            if !rest.isEmpty || prefs.showTrash {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: prefs.spacing) {
+                    if prefs.showTrash { TrashIcon(model: model, prefs: prefs) }
+                    ForEach(rest) { item in DockIcon(item: item, model: model, prefs: prefs) }
+                }
+                .frame(width: CGFloat(cols) * prefs.iconSize + CGFloat(cols - 1) * gap)
+                Capsule().fill(.secondary.opacity(0.5))
+                    .frame(width: prefs.iconSize * 1.5, height: 1)
+                    .padding(.vertical, 4)
+            }
+            Grid(horizontalSpacing: gap, verticalSpacing: prefs.spacing + 4) {
+                ForEach(rows.indices, id: \.self) { r in
+                    GridRow {
+                        ForEach(rows[r].indices, id: \.self) { c in
+                            if let ws = rows[r][c] {
+                                WorkspaceCell(workspace: ws, model: model, prefs: prefs)
+                            } else {
+                                Color.clear.frame(width: prefs.iconSize, height: prefs.iconSize)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 6)
+    }
+
+    private var columnBody: some View {
         VStack(spacing: prefs.spacing) {
             if prefs.showTrash {
                 TrashIcon(model: model, prefs: prefs)
@@ -48,24 +110,70 @@ struct DockView: View {
                 }
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 8)
-        .padding(prefs.edge == .left ? .trailing : .leading, magnifyRoom)
-        .fixedSize()
-        .contentShape(Rectangle())
-        .coordinateSpace(name: "dock")
-        .onPreferenceChange(IconFrames.self) { frames = $0 }
-        .onContinuousHover(coordinateSpace: .named("dock")) { phase in
-            switch phase {
-            case .active(let pt):
-                // Only the icon square directly under the pointer lights up.
-                let id = frames.first { $0.value.contains(pt) }?.key
-                if model.hoveredID != id { model.hoveredID = id }
-            case .ended:
-                if model.hoveredID != nil { model.hoveredID = nil }
+    }
+}
+
+// MARK: - Workspace cell
+
+/// One AeroSpace workspace in the keyboard grid: its app (or a 2×2 of its apps) and its letter.
+/// Click to switch to that workspace.
+struct WorkspaceCell: View {
+    let workspace: String
+    @ObservedObject var model: DockModel
+    @ObservedObject var prefs: Prefs
+
+    private var size: CGFloat { prefs.iconSize }
+    private var hoverID: String { "ws:" + workspace }
+    private var hovering: Bool { model.hoveredID == hoverID }
+    private var apps: [String] { model.aero.apps[workspace] ?? [] }
+    private var focused: Bool { workspace == model.aero.focused }
+
+    var body: some View {
+        content
+            .frame(width: size, height: size)
+            .brightness(hovering ? 0.12 : 0)
+            .shadow(color: .white.opacity(hovering ? 0.55 : 0), radius: hovering ? 8 : 0)
+            .overlay(alignment: .bottomLeading) { letter.offset(x: -4, y: 4) }
+            .scaleEffect(hovering && prefs.magnify ? min(prefs.magnifyAmount, 1.1) : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.82), value: hovering)
+            .zIndex(hovering ? 1 : 0)
+            .contentShape(Rectangle())
+            .reportsFrame(hoverID)
+            .onTapGesture { model.openStack = nil; AeroSpace.focus(workspace) }
+            .help(apps.map { FileManager.default.displayName(atPath: $0).replacingOccurrences(of: ".app", with: "") }
+                .joined(separator: ", "))
+            .contextMenu {
+                Button("Go to Workspace \(workspace)") { AeroSpace.focus(workspace) }
+                if !apps.isEmpty { Divider() }
+                ForEach(apps, id: \.self) { path in
+                    let name = FileManager.default.displayName(atPath: path).replacingOccurrences(of: ".app", with: "")
+                    Button("Quit \(name)") {
+                        NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.path == path }.forEach { $0.terminate() }
+                    }
+                }
             }
+    }
+
+    @ViewBuilder private var content: some View {
+        if apps.count == 1 {
+            Image(nsImage: model.icon(for: apps[0])).resizable().interpolation(.high)
+        } else if apps.count > 1 {
+            StackPreview(urls: apps.prefix(4).map { URL(fileURLWithPath: $0) }, size: size)
+        } else {
+            RoundedRectangle(cornerRadius: size * 0.22)
+                .strokeBorder(Color.primary.opacity(0.15), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
         }
-        .onDrop(of: [.fileURL, .sideDockItem], delegate: ItemDrop(target: nil, model: model, height: 0))
+    }
+
+    private var letter: some View {
+        Text(workspace)
+            .font(.system(size: max(8, size * 0.22), weight: .bold, design: .rounded))
+            .foregroundStyle(focused ? Color.white : Color.primary)
+            .padding(.horizontal, 3)
+            .frame(minWidth: size * 0.32, minHeight: size * 0.32)
+            .background(RoundedRectangle(cornerRadius: 4)
+                .fill(focused ? Color.accentColor : Color(nsColor: .windowBackgroundColor).opacity(0.92)))
+            .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
     }
 }
 
