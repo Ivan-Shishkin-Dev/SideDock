@@ -224,12 +224,23 @@ final class AppController: NSObject, NSApplicationDelegate {
         // Moving only the window origin is cheap: nothing inside has to redraw.
         slide = Slide(from: panel.frame.origin, to: target.origin, fromAlpha: panel.alphaValue, toAlpha: alpha,
                       start: CACurrentMediaTime(), duration: prefs.animationDuration)
-        if displayLink == nil {
-            // Use the screen's display link: a view's link stops firing while its window is offscreen.
-            let link = screen.displayLink(target: self, selector: #selector(stepSlide(_:)))
-            link.add(to: .main, forMode: .common)
-            displayLink = link
-        }
+        // Fresh display link every slide: a link tied to a screen that was unplugged or rearranged
+        // stops firing, which used to freeze the dock in place. (A view's link also stops offscreen.)
+        displayLink?.invalidate()
+        let link = (panel.screen ?? screen).displayLink(target: self, selector: #selector(stepSlide(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    /// Safety net, run from the 0.1 s timer: if a slide outlived its duration (its display link
+    /// died), jump straight to where it was going.
+    private func finishStuckSlide() {
+        guard let s = slide, CACurrentMediaTime() - s.start > s.duration + 0.25 else { return }
+        panel.setFrameOrigin(s.to)
+        panel.alphaValue = s.toAlpha
+        slide = nil
+        displayLink?.invalidate()
+        displayLink = nil
     }
 
     @objc private func stepSlide(_ link: CADisplayLink) {
@@ -264,6 +275,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func trackMouse() {
         trackDrag()
+        finishStuckSlide()
         guard prefs.autoHide else { return }
         let p = NSEvent.mouseLocation
         let full = screen.frame
