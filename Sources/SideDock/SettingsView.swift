@@ -285,6 +285,7 @@ private struct AboutTab: View {
             Spacer().frame(height: 12)
             HStack {
                 Button("Reset All Settings") { prefs.resetAll() }
+                Button("Restart SideDock") { restartSideDock() }
                 Button("Quit SideDock") { NSApp.terminate(nil) }
             }
         }

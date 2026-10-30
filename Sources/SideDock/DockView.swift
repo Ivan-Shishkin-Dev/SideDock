@@ -158,6 +158,7 @@ struct WorkspaceCell: View {
                 .joined(separator: ", "))
             .contextMenu {
                 Button("Go to Workspace \(workspace)") { AeroSpace.focus(workspace) }
+                Button("Restart SideDock") { restartSideDock() }
                 if !apps.isEmpty { Divider() }
                 ForEach(apps, id: \.self) { path in
                     let name = FileManager.default.displayName(atPath: path).replacingOccurrences(of: ".app", with: "")
@@ -382,6 +383,7 @@ struct DockIcon: View {
         }
         Divider()
         Button("SideDock Settings…") { NotificationCenter.default.post(name: .openSideDockSettings, object: nil) }
+        Button("Restart SideDock") { restartSideDock() }
     }
 }
 

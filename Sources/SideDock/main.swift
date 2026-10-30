@@ -330,6 +330,16 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func setRight() { prefs.edge = .right }
     @objc private func toggleAutoHide() { prefs.autoHide.toggle() }
     @objc private func settingsAction() { openSettings() }
+    @objc private func restartAction() { restartSideDock() }
+}
+
+/// Quits and relaunches SideDock: a quick fix when the dock gets into a bad state.
+@MainActor func restartSideDock() {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/bin/sh")
+    task.arguments = ["-c", "sleep 0.6; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+    try? task.run()
+    NSApp.terminate(nil)
 }
 
 extension AppController: NSMenuDelegate {
@@ -347,6 +357,7 @@ extension AppController: NSMenuDelegate {
         add("Right Edge", #selector(setRight), on: prefs.edge == .right)
         add("Auto-hide", #selector(toggleAutoHide), on: prefs.autoHide)
         menu.addItem(.separator())
+        add("Restart SideDock", #selector(restartAction), key: "r")
         menu.addItem(NSMenuItem(title: "Quit SideDock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 }
