@@ -53,6 +53,7 @@ final class DockModel: ObservableObject {
     @Published private(set) var frontmostPath: String?   // AeroSpace workspace per app
     @Published var prefsVersion = 0            // bumps when folder settings change
     var dragging: String?                      // item being reordered
+    @Published var holdingDrag = false         // something (file or icon) is being dragged anywhere
 
     private let pinKey = "pinnedApps"
     private var iconCache: [String: NSImage] = [:]

@@ -63,9 +63,9 @@ struct DockView: View {
         let rest = model.pinnedItems.filter { $0.kind != .app || model.workspaces(for: $0).isEmpty }
         let columns = Array(repeating: GridItem(.fixed(prefs.iconSize), spacing: gap), count: cols)
         return VStack(spacing: prefs.spacing) {
-            if !rest.isEmpty || prefs.showTrash {
+            if !rest.isEmpty || (prefs.showTrash || model.holdingDrag) {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: prefs.spacing) {
-                    if prefs.showTrash { TrashIcon(model: model, prefs: prefs) }
+                    if (prefs.showTrash || model.holdingDrag) { TrashIcon(model: model, prefs: prefs) }
                     ForEach(rest) { item in DockIcon(item: item, model: model, prefs: prefs) }
                 }
                 .frame(width: CGFloat(cols) * prefs.iconSize + CGFloat(cols - 1) * gap)
@@ -92,7 +92,7 @@ struct DockView: View {
 
     private var columnBody: some View {
         VStack(spacing: prefs.spacing) {
-            if prefs.showTrash {
+            if (prefs.showTrash || model.holdingDrag) {
                 TrashIcon(model: model, prefs: prefs)
             }
             ForEach(model.pinnedItems) { item in

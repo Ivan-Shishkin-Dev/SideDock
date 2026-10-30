@@ -251,7 +251,19 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     /// Reveal when the pointer touches the screen edge; hide shortly after it leaves.
+    private var dragBaseline = NSPasteboard(name: .drag).changeCount
+
+    /// Notices drags anywhere (Finder files, dock icons) so the Trash can appear while you hold something.
+    private func trackDrag() {
+        let down = NSEvent.pressedMouseButtons & 1 != 0
+        let count = NSPasteboard(name: .drag).changeCount
+        if !down { dragBaseline = count }
+        let holding = down && (count != dragBaseline || model.dragging != nil)
+        if holding != model.holdingDrag { model.holdingDrag = holding }
+    }
+
     private func trackMouse() {
+        trackDrag()
         guard prefs.autoHide else { return }
         let p = NSEvent.mouseLocation
         let full = screen.frame
