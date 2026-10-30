@@ -271,6 +271,9 @@ final class AppController: NSObject, NSApplicationDelegate {
             let popups = NSApp.windows.filter { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
             let near = panel.frame.insetBy(dx: -24, dy: -24).contains(p)
                 || popups.contains { $0.frame.insetBy(dx: -24, dy: -24).contains(p) }
+            // A drag that ended outside the dock never reaches a drop handler, so clear it
+            // once the mouse button is up; otherwise the dock would stay open forever.
+            if model.dragging != nil && NSEvent.pressedMouseButtons & 1 == 0 { model.dragging = nil }
             if near || model.dragging != nil {
                 mouseLeftAt = nil
             } else if let left = mouseLeftAt {
