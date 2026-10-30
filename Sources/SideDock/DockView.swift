@@ -60,7 +60,12 @@ struct DockView: View {
         let rows = AeroSpace.keyboardRows(model.aero.all)
         let cols = rows.map(\.count).max() ?? 1
         let gap = prefs.spacing + 10   // wider columns so the grid reads like keys
-        let rest = model.pinnedItems.filter { $0.kind != .app || model.workspaces(for: $0).isEmpty }
+        // Top: closed apps, folders, groups. Bottom: apps that are open but have no AeroSpace window.
+        let rest = model.pinnedItems.filter { $0.kind != .app || (!$0.isRunning && model.workspaces(for: $0).isEmpty) }
+        let loose = prefs.showRunningApps
+            ? (model.pinnedItems + model.runningItems).filter { $0.kind == .app && $0.isRunning && model.workspaces(for: $0).isEmpty }
+            : []
+        let width = CGFloat(cols) * prefs.iconSize + CGFloat(cols - 1) * gap
         let columns = Array(repeating: GridItem(.fixed(prefs.iconSize), spacing: gap), count: cols)
         return VStack(spacing: prefs.spacing) {
             if !rest.isEmpty || (prefs.showTrash || model.holdingDrag) {
@@ -68,7 +73,7 @@ struct DockView: View {
                     if (prefs.showTrash || model.holdingDrag) { TrashIcon(model: model, prefs: prefs) }
                     ForEach(rest) { item in DockIcon(item: item, model: model, prefs: prefs) }
                 }
-                .frame(width: CGFloat(cols) * prefs.iconSize + CGFloat(cols - 1) * gap)
+                .frame(width: width)
                 Capsule().fill(.secondary.opacity(0.5))
                     .frame(width: prefs.iconSize * 1.5, height: 1)
                     .padding(.vertical, 4)
@@ -85,6 +90,15 @@ struct DockView: View {
                         }
                     }
                 }
+            }
+            if !loose.isEmpty {
+                Capsule().fill(.secondary.opacity(0.5))
+                    .frame(width: prefs.iconSize * 1.5, height: 1)
+                    .padding(.vertical, 4)
+                LazyVGrid(columns: columns, alignment: .leading, spacing: prefs.spacing) {
+                    ForEach(loose) { item in DockIcon(item: item, model: model, prefs: prefs) }
+                }
+                .frame(width: width)
             }
         }
         .padding(.horizontal, 6)
